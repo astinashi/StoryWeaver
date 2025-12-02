@@ -1,0 +1,5 @@
+{
+  "name": "StoryWeaver",
+  "description": "A professional visual novel script editor featuring a dual-view system (Table & Graph) for managing dialogue, branching narratives, and logic flow with JSON export capabilities.",
+  "requestFramePermissions": []
+}
