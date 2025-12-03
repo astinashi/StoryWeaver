@@ -1,4 +1,5 @@
 
+
 export enum NodeType {
   DIALOGUE = 'DIALOGUE',
   MONOLOGUE = 'MONOLOGUE',
@@ -30,21 +31,35 @@ export interface ScriptNode {
   metadata?: Record<string, any>; // For extra JSON fields
 }
 
-export interface ProjectData {
+// --- Outline Mode Types ---
+export type OutlineNodeType = 'DEFAULT' | 'CHOICE' | 'END';
+export type OutlineColor = 'white' | 'blue' | 'green' | 'yellow' | 'red';
+export type AnchorSide = 'top' | 'bottom' | 'left' | 'right';
+
+export interface OutlineNode {
+  id: string;
+  position: { x: number; y: number };
+  width: number;
+  height: number;
   title: string;
-  nodes: ScriptNode[];
-  zoom: number;
-  pan: { x: number; y: number };
+  content: string;
+  color: OutlineColor;
+  type: OutlineNodeType;
 }
 
-// Full save file structure
-export interface ProjectFile extends ProjectData {
-  version: string;
-  lastModified: number;
-  viewOptions: ViewOptions;
+export interface OutlineEdge {
+  id: string;
+  sourceId: string;
+  sourceAnchor: AnchorSide;
+  targetId: string;
+  targetAnchor: AnchorSide;
+  label?: string;
 }
 
-export type ViewMode = 'TABLE' | 'GRAPH';
+// --- App Modes & Files ---
+
+export type AppMode = 'SCRIPT' | 'OUTLINE';
+export type ViewMode = 'TABLE' | 'GRAPH'; // Only applies to SCRIPT mode
 
 export interface ViewOptions {
   showScene: boolean;
@@ -68,6 +83,31 @@ export interface GlobalLists {
   knownExpressions: string[];
 }
 
+// Separate File Types
+export interface ScriptFile {
+  fileType: 'SCRIPT';
+  title: string;
+  nodes: ScriptNode[];
+  zoom: number;
+  pan: { x: number; y: number };
+  viewOptions: ViewOptions;
+  version: string;
+  lastModified: number;
+}
+
+export interface OutlineFile {
+  fileType: 'OUTLINE';
+  title: string;
+  nodes: OutlineNode[];
+  edges: OutlineEdge[];
+  zoom: number;
+  pan: { x: number; y: number };
+  version: string;
+  lastModified: number;
+}
+
+export type ProjectFile = ScriptFile | OutlineFile;
+
 // Helper to generate a human-readable label for a node
 export const getNodeLabel = (node: ScriptNode): string => {
   let prefix = node.character;
@@ -82,12 +122,10 @@ export const getNodeLabel = (node: ScriptNode): string => {
     ? (node.text.length > 25 ? node.text.slice(0, 25) + '...' : node.text) 
     : '';
   
-  // Format: "Hero: Hello world... (#a1b2)"
-  // If text is empty, just show ID suffix
   return `${prefix}${textPreview ? ': "' + textPreview + '"' : ''} #${node.id.slice(-4)}`;
 };
 
-// --- File System Access API Types (Polyfill-ish) ---
+// --- File System Access API Types ---
 export interface FileSystemHandle {
   kind: 'file' | 'directory';
   name: string;

@@ -1,9 +1,12 @@
+
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
-import { ScriptNode, NodeType, ViewMode, ViewOptions, FilterOptions, ProjectFile, FileSystemFileHandle } from './types';
+import { ScriptNode, NodeType, ViewMode, ViewOptions, FilterOptions, ScriptFile, OutlineFile, FileSystemFileHandle, OutlineNode, OutlineEdge, AppMode } from './types';
 import { Toolbar } from './components/Toolbar';
 import { TableView } from './components/TableView';
 import { GraphView } from './components/GraphView';
+import { OutlineView } from './components/OutlineView';
 import { Inspector } from './components/Inspector';
+import { OutlineInspector } from './components/OutlineInspector';
 import { exportToJson, exportToExcel, exportToPng, saveProjectFile } from './services/exportService';
 
 const INITIAL_NODES: ScriptNode[] = [
@@ -23,45 +26,40 @@ const INITIAL_NODES: ScriptNode[] = [
     character: 'Hero',
     text: 'The weather on Sunday is terrible... I am standing on the runway.',
     choices: [],
-    nextId: 'node-2',
+    nextId: null,
     position: { x: 500, y: 100 },
     scene: 'bg_runway',
     expression: 'gloom'
-  },
-  {
-    id: 'node-2',
-    type: NodeType.DIALOGUE,
-    character: 'Hero',
-    text: 'I woke up in a strange place...',
-    choices: [],
-    nextId: null,
-    position: { x: 900, y: 100 },
-    scene: 'bg_runway',
-    characterArt: 'ch_hero_pajamas',
-    expression: 'confused'
   }
 ];
 
-const AUTOSAVE_KEY = 'storyweaver_autosave_v1';
+const AUTOSAVE_SCRIPT_KEY = 'storyweaver_script_v2';
+const AUTOSAVE_OUTLINE_KEY = 'storyweaver_outline_v2';
 
 const App: React.FC = () => {
-  // --- State ---
-  const [projectTitle, setProjectTitle] = useState("My Visual Novel");
+  // --- Mode State ---
+  const [appMode, setAppMode] = useState<AppMode>('SCRIPT');
+  const [scriptViewMode, setScriptViewMode] = useState<ViewMode>('GRAPH');
+
+  // --- Script Workspace State ---
+  const [scriptTitle, setScriptTitle] = useState("Untitled Script");
   const [nodes, setNodes] = useState<ScriptNode[]>(INITIAL_NODES);
-  const [viewMode, setViewMode] = useState<ViewMode>('GRAPH');
+  const [scriptZoom, setScriptZoom] = useState(1.0);
+  const [scriptFileHandle, setScriptFileHandle] = useState<FileSystemFileHandle | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
-  const [zoom, setZoom] = useState(1.0);
+
+  // --- Outline Workspace State ---
+  const [outlineTitle, setOutlineTitle] = useState("Untitled Outline");
+  const [outlineNodes, setOutlineNodes] = useState<OutlineNode[]>([]);
+  const [outlineEdges, setOutlineEdges] = useState<OutlineEdge[]>([]);
+  const [outlineZoom, setOutlineZoom] = useState(1.0);
+  const [outlineFileHandle, setOutlineFileHandle] = useState<FileSystemFileHandle | null>(null);
+  const [selectedOutlineNodeId, setSelectedOutlineNodeId] = useState<string | null>(null);
+
+  // --- Common UI State ---
   const [isAutoSaved, setIsAutoSaved] = useState(true);
   
-  // File Handle State (for Native Save)
-  const [fileHandle, setFileHandle] = useState<FileSystemFileHandle | null>(null);
-
-  // History State
-  const [history, setHistory] = useState<{nodes: ScriptNode[]}[]>([{ nodes: INITIAL_NODES }]);
-  const [historyIndex, setHistoryIndex] = useState(0);
-  const historyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  
-  // Visibility Settings
+  // Visibility & Filters (Script only)
   const [viewOptions, setViewOptions] = useState<ViewOptions>({
       showScene: true,
       showArt: true,
@@ -69,8 +67,6 @@ const App: React.FC = () => {
       showLogic: true,
       enableColorCoding: true
   });
-
-  // Filter Settings
   const [filterOptions, setFilterOptions] = useState<FilterOptions>({
       character: '',
       scene: '',
@@ -80,130 +76,187 @@ const App: React.FC = () => {
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // --- History Management (Dual Stack) ---
+  
+  // Script History
+  const [scriptHistory, setScriptHistory] = useState<ScriptNode[][]>([INITIAL_NODES]);
+  const [scriptHistoryIndex, setScriptHistoryIndex] = useState(0);
+
+  // Outline History
+  const [outlineHistory, setOutlineHistory] = useState<{nodes: OutlineNode[], edges: OutlineEdge[]}[]>([{ nodes: [], edges: [] }]);
+  const [outlineHistoryIndex, setOutlineHistoryIndex] = useState(0);
+
+  const historyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // --- Autosave & Load ---
 
-  // Load on mount
   useEffect(() => {
-      const savedData = localStorage.getItem(AUTOSAVE_KEY);
-      if (savedData) {
+      // Load Script
+      const savedScript = localStorage.getItem(AUTOSAVE_SCRIPT_KEY);
+      if (savedScript) {
           try {
-              const parsed: ProjectFile = JSON.parse(savedData);
-              if (parsed && Array.isArray(parsed.nodes)) {
+              const parsed: ScriptFile = JSON.parse(savedScript);
+              if (parsed.fileType === 'SCRIPT' && Array.isArray(parsed.nodes)) {
                   setNodes(parsed.nodes);
-                  setHistory([{ nodes: parsed.nodes }]); // Init history
-                  setHistoryIndex(0);
-                  setProjectTitle(parsed.title || "My Visual Novel");
+                  setScriptTitle(parsed.title);
+                  setScriptZoom(parsed.zoom || 1.0);
                   if (parsed.viewOptions) setViewOptions(parsed.viewOptions);
-                  if (parsed.zoom) setZoom(parsed.zoom);
-                  console.log("Restored from autosave");
+                  setScriptHistory([parsed.nodes]);
+                  setScriptHistoryIndex(0);
               }
-          } catch (e) {
-              console.error("Failed to load autosave", e);
-          }
+          } catch (e) { console.error("Script autosave load failed", e); }
+      }
+
+      // Load Outline
+      const savedOutline = localStorage.getItem(AUTOSAVE_OUTLINE_KEY);
+      if (savedOutline) {
+          try {
+              const parsed: OutlineFile = JSON.parse(savedOutline);
+              if (parsed.fileType === 'OUTLINE' && Array.isArray(parsed.nodes)) {
+                  setOutlineNodes(parsed.nodes);
+                  setOutlineEdges(parsed.edges);
+                  setOutlineTitle(parsed.title);
+                  setOutlineZoom(parsed.zoom || 1.0);
+                  setOutlineHistory([{ nodes: parsed.nodes, edges: parsed.edges }]);
+                  setOutlineHistoryIndex(0);
+              }
+          } catch (e) { console.error("Outline autosave load failed", e); }
       }
   }, []);
 
-  // Save on change (debounced)
+  // Autosave Effect
   useEffect(() => {
       setIsAutoSaved(false);
       const timer = setTimeout(() => {
-          const projectData: ProjectFile = {
-              title: projectTitle,
+          // Save Script
+          const scriptData: ScriptFile = {
+              fileType: 'SCRIPT',
+              title: scriptTitle,
               nodes,
-              zoom,
-              pan: { x: 0, y: 0 },
+              zoom: scriptZoom,
+              pan: {x: 0, y: 0},
+              viewOptions,
               version: '1.0.0',
-              lastModified: Date.now(),
-              viewOptions
+              lastModified: Date.now()
           };
-          localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(projectData));
+          localStorage.setItem(AUTOSAVE_SCRIPT_KEY, JSON.stringify(scriptData));
+
+          // Save Outline
+          const outlineData: OutlineFile = {
+              fileType: 'OUTLINE',
+              title: outlineTitle,
+              nodes: outlineNodes,
+              edges: outlineEdges,
+              zoom: outlineZoom,
+              pan: {x: 0, y: 0},
+              version: '1.0.0',
+              lastModified: Date.now()
+          };
+          localStorage.setItem(AUTOSAVE_OUTLINE_KEY, JSON.stringify(outlineData));
+          
           setIsAutoSaved(true);
       }, 1000);
-
       return () => clearTimeout(timer);
-  }, [nodes, projectTitle, viewOptions, zoom]);
+  }, [nodes, outlineNodes, outlineEdges, scriptTitle, outlineTitle, viewOptions, scriptZoom, outlineZoom]);
 
 
-  // --- History Management (Undo/Redo) ---
-  
-  const pushToHistory = useCallback((newNodes: ScriptNode[], immediate = false) => {
-      // If immediate, push now.
-      // If not immediate (e.g. typing), debounce.
+  // --- History Logic ---
+
+  const pushScriptHistory = useCallback((newNodes: ScriptNode[], immediate = false) => {
+      if (historyTimeoutRef.current) clearTimeout(historyTimeoutRef.current);
       
-      if (historyTimeoutRef.current) {
-          clearTimeout(historyTimeoutRef.current);
-          historyTimeoutRef.current = null;
-      }
-
       const commit = () => {
-          setHistory(prev => {
-             const newHistory = prev.slice(0, historyIndex + 1);
-             // Verify if it's actually different to avoid duplicates
-             const current = newHistory[newHistory.length - 1];
-             if (JSON.stringify(current.nodes) === JSON.stringify(newNodes)) {
-                 return prev; // No change
-             }
-             newHistory.push({ nodes: newNodes });
-             // Limit history size to 50
-             if (newHistory.length > 50) return newHistory.slice(newHistory.length - 50);
-             return newHistory;
-          });
-          setHistoryIndex(prev => {
-             const max = Math.min(prev + 1, 49); 
-             // Logic above handles slicing, but we need to ensure index matches new length
-             // simpler: setHistory uses functional update, so we need to know new length. 
-             // Let's just assume we increment index unless at cap.
-             return prev + 1; // This logic is slightly flawed with the slice above inside callback
-                              // but good enough for simple stack.
-          });
-          // Fix Index Sync:
-          setHistory(prev => {
-              const sliced = prev.slice(0, historyIndex + 1);
-              sliced.push({ nodes: newNodes });
+          setScriptHistory(prev => {
+              const current = prev[scriptHistoryIndex];
+              // Safety check: ensure current state exists before comparing
+              if (!current) return prev;
+
+              if (JSON.stringify(current) === JSON.stringify(newNodes)) return prev;
+              
+              const sliced = prev.slice(0, scriptHistoryIndex + 1);
+              sliced.push(newNodes);
               if (sliced.length > 50) sliced.shift();
-              setHistoryIndex(sliced.length - 1);
               return sliced;
           });
+          setScriptHistoryIndex(prev => Math.min(prev + 1, 49)); 
       };
 
-      if (immediate) {
-          commit();
-      } else {
-          historyTimeoutRef.current = setTimeout(commit, 800); // 800ms debounce for typing
-      }
-  }, [historyIndex]);
+      if (immediate) commit();
+      else historyTimeoutRef.current = setTimeout(commit, 800);
+  }, [scriptHistoryIndex]);
+
+  const pushOutlineHistory = useCallback((newNodes: OutlineNode[], newEdges: OutlineEdge[], immediate = false) => {
+      if (historyTimeoutRef.current) clearTimeout(historyTimeoutRef.current);
+
+      const commit = () => {
+        setOutlineHistory(prev => {
+            const current = prev[outlineHistoryIndex];
+            // Safety check: ensure current state exists before accessing properties
+            if (!current) return prev;
+
+            if (JSON.stringify(current.nodes) === JSON.stringify(newNodes) && 
+                JSON.stringify(current.edges) === JSON.stringify(newEdges)) return prev;
+            
+            const sliced = prev.slice(0, outlineHistoryIndex + 1);
+            sliced.push({ nodes: newNodes, edges: newEdges });
+            if (sliced.length > 50) sliced.shift();
+            return sliced;
+        });
+        setOutlineHistoryIndex(prev => Math.min(prev + 1, 49));
+      };
+
+      if (immediate) commit();
+      else historyTimeoutRef.current = setTimeout(commit, 800);
+  }, [outlineHistoryIndex]);
+
 
   const handleUndo = () => {
-      if (historyIndex > 0) {
-          const newIndex = historyIndex - 1;
-          setHistoryIndex(newIndex);
-          setNodes(history[newIndex].nodes);
+      if (appMode === 'SCRIPT') {
+          if (scriptHistoryIndex > 0) {
+              const newIndex = scriptHistoryIndex - 1;
+              setScriptHistoryIndex(newIndex);
+              setNodes(scriptHistory[newIndex]);
+          }
+      } else {
+          if (outlineHistoryIndex > 0) {
+              const newIndex = outlineHistoryIndex - 1;
+              setOutlineHistoryIndex(newIndex);
+              setOutlineNodes(outlineHistory[newIndex].nodes);
+              setOutlineEdges(outlineHistory[newIndex].edges);
+          }
       }
   };
 
   const handleRedo = () => {
-      if (historyIndex < history.length - 1) {
-          const newIndex = historyIndex + 1;
-          setHistoryIndex(newIndex);
-          setNodes(history[newIndex].nodes);
+      if (appMode === 'SCRIPT') {
+          if (scriptHistoryIndex < scriptHistory.length - 1) {
+              const newIndex = scriptHistoryIndex + 1;
+              setScriptHistoryIndex(newIndex);
+              setNodes(scriptHistory[newIndex]);
+          }
+      } else {
+          if (outlineHistoryIndex < outlineHistory.length - 1) {
+              const newIndex = outlineHistoryIndex + 1;
+              setOutlineHistoryIndex(newIndex);
+              setOutlineNodes(outlineHistory[newIndex].nodes);
+              setOutlineEdges(outlineHistory[newIndex].edges);
+          }
       }
   };
 
-  // --- Data Logic ---
+  // --- Logic ---
 
   const globalLists = useMemo(() => {
     const chars = new Set<string>();
     const scenes = new Set<string>();
     const arts = new Set<string>();
     const exprs = new Set<string>();
-
     nodes.forEach(node => {
       if (node.character) chars.add(node.character);
       if (node.scene) scenes.add(node.scene);
       if (node.characterArt) arts.add(node.characterArt);
       if (node.expression) exprs.add(node.expression);
     });
-
     return {
       knownCharacters: Array.from(chars).sort(),
       knownScenes: Array.from(scenes).sort(),
@@ -212,12 +265,20 @@ const App: React.FC = () => {
     };
   }, [nodes]);
 
-  const handleToggleViewOption = (key: keyof ViewOptions) => {
-      setViewOptions(prev => ({ ...prev, [key]: !prev[key] }));
+  // Script Actions
+  const handleUpdateNode = (updatedNode: ScriptNode) => {
+    const newNodes = nodes.map(n => n.id === updatedNode.id ? updatedNode : n);
+    setNodes(newNodes);
+    const oldNode = nodes.find(n => n.id === updatedNode.id);
+    const immediate = oldNode && (oldNode.type !== updatedNode.type || oldNode.nextId !== updatedNode.nextId);
+    pushScriptHistory(newNodes, !!immediate);
   };
 
-  const handleFilterChange = (key: keyof FilterOptions, value: string) => {
-      setFilterOptions(prev => ({ ...prev, [key]: value }));
+  const handleUpdateNodes = (updatedNodes: ScriptNode[]) => {
+    const nodeMap = new Map(updatedNodes.map(n => [n.id, n]));
+    const newNodes = nodes.map(n => nodeMap.get(n.id) || n);
+    setNodes(newNodes);
+    pushScriptHistory(newNodes, true);
   };
 
   const handleAddNode = () => {
@@ -234,316 +295,337 @@ const App: React.FC = () => {
     const newNodes = [...nodes, newNode];
     setNodes(newNodes);
     setSelectedNodeId(newNode.id);
-    pushToHistory(newNodes, true);
-  };
-
-  const handleUpdateNode = (updatedNode: ScriptNode) => {
-    // Check if it's a structural change or just text
-    const oldNode = nodes.find(n => n.id === updatedNode.id);
-    let immediate = false;
-    
-    if (oldNode) {
-        if (oldNode.type !== updatedNode.type || 
-            oldNode.nextId !== updatedNode.nextId ||
-            oldNode.choices.length !== updatedNode.choices.length ||
-            // Dragging (position change) should probably be immediate or throttled. 
-            // Currently handled by mouseUp in GraphView, so this is mostly fields.
-            oldNode.scene !== updatedNode.scene
-        ) {
-            immediate = true;
-        }
-    }
-
-    const newNodes = nodes.map(n => n.id === updatedNode.id ? updatedNode : n);
-    setNodes(newNodes);
-    pushToHistory(newNodes, immediate);
-  };
-
-  const handleUpdateNodes = (updatedNodes: ScriptNode[]) => {
-    const nodeMap = new Map(updatedNodes.map(n => [n.id, n]));
-    const newNodes = nodes.map(n => nodeMap.get(n.id) || n);
-    setNodes(newNodes);
-    pushToHistory(newNodes, true); // Bulk update (like auto layout) is immediate
+    pushScriptHistory(newNodes, true);
   };
 
   const handleDeleteNode = (id: string) => {
     const newNodes = nodes.filter(n => n.id !== id);
     setNodes(newNodes);
     if (selectedNodeId === id) setSelectedNodeId(null);
-    pushToHistory(newNodes, true);
+    pushScriptHistory(newNodes, true);
   };
 
-  const handleReorderNodes = (fromIndex: number, toIndex: number) => {
-      if (fromIndex === toIndex) return;
+  const handleReorderNodes = (from: number, to: number) => {
       const newNodes = [...nodes];
-      const [movedNode] = newNodes.splice(fromIndex, 1);
-      newNodes.splice(toIndex, 0, movedNode);
+      const [moved] = newNodes.splice(from, 1);
+      newNodes.splice(to, 0, moved);
       setNodes(newNodes);
-      pushToHistory(newNodes, true);
-  }
+      pushScriptHistory(newNodes, true);
+  };
+
+  // Outline Actions
+  const handleUpdateOutline = (newNodes: OutlineNode[], newEdges: OutlineEdge[]) => {
+      setOutlineNodes(newNodes);
+      setOutlineEdges(newEdges);
+      // Logic: If node count changed or edge count changed, immediate commit.
+      // Otherwise (moving nodes), rely on debounce.
+      const prevNodesCount = outlineHistory[outlineHistoryIndex]?.nodes.length || 0;
+      const prevEdgesCount = outlineHistory[outlineHistoryIndex]?.edges.length || 0;
+      const isStructureChange = newNodes.length !== prevNodesCount || newEdges.length !== prevEdgesCount;
+      
+      pushOutlineHistory(newNodes, newEdges, isStructureChange); 
+  };
+
+  const handleAddOutlineNode = () => {
+      const newNode: OutlineNode = {
+          id: `outline-${Date.now()}`,
+          position: { x: 400 - (200/2) + Math.random()*50, y: 300 - (120/2) + Math.random()*50 },
+          width: 200,
+          height: 120,
+          title: 'New Card',
+          content: '',
+          color: 'white',
+          type: 'DEFAULT'
+      };
+      // For ADD, we pass a new array. The `handleUpdateOutline` will detect length change and commit immediately.
+      handleUpdateOutline([...outlineNodes, newNode], outlineEdges);
+      setSelectedOutlineNodeId(newNode.id);
+  };
+
+  const handleUpdateOutlineNode = (updatedNode: OutlineNode) => {
+      const newNodes = outlineNodes.map(n => n.id === updatedNode.id ? updatedNode : n);
+      handleUpdateOutline(newNodes, outlineEdges);
+  };
+
+  const handleDeleteOutlineNode = (id: string) => {
+      const newNodes = outlineNodes.filter(n => n.id !== id);
+      const newEdges = outlineEdges.filter(e => e.sourceId !== id && e.targetId !== id);
+      handleUpdateOutline(newNodes, newEdges);
+      if (selectedOutlineNodeId === id) setSelectedOutlineNodeId(null);
+  };
 
   // --- File Actions ---
 
   const handleNewProject = () => {
-      if (confirm("Create new project? Unsaved changes will be lost.")) {
-          setNodes(INITIAL_NODES);
-          setProjectTitle("Untitled Story");
-          setSelectedNodeId(null);
-          setZoom(1.0);
-          setFileHandle(null); // Reset file handle
-          setHistory([{ nodes: INITIAL_NODES }]);
-          setHistoryIndex(0);
+      if (confirm(`Create new ${appMode === 'SCRIPT' ? 'Script' : 'Outline'}? Unsaved changes in this mode will be lost.`)) {
+          if (appMode === 'SCRIPT') {
+              setNodes(INITIAL_NODES);
+              setScriptTitle("Untitled Script");
+              setScriptFileHandle(null);
+              setScriptHistory([INITIAL_NODES]);
+              setScriptHistoryIndex(0);
+          } else {
+              setOutlineNodes([]);
+              setOutlineEdges([]);
+              setOutlineTitle("Untitled Outline");
+              setOutlineFileHandle(null);
+              setOutlineHistory([{ nodes: [], edges: [] }]);
+              setOutlineHistoryIndex(0);
+          }
       }
   };
 
-  // Modern Save (Native FS API)
   const handleSaveProject = async () => {
-      // 1. If we have a handle, write to it.
-      if (fileHandle) {
-          try {
-              const writable = await fileHandle.createWritable();
-              const projectData: ProjectFile = {
-                  title: projectTitle,
-                  nodes,
-                  zoom,
-                  pan: {x: 0, y: 0},
-                  version: '1.0.0',
-                  lastModified: Date.now(),
-                  viewOptions
-              };
-              await writable.write(JSON.stringify(projectData, null, 2));
-              await writable.close();
-              alert("Saved successfully!");
-              return;
-          } catch (err) {
-              console.error("Failed to write to file handle", err);
-              // Fallback if permission lost
+      if (appMode === 'SCRIPT') {
+          const data: ScriptFile = {
+              fileType: 'SCRIPT',
+              title: scriptTitle,
+              nodes,
+              zoom: scriptZoom,
+              pan: {x:0, y:0},
+              viewOptions,
+              version: '1.0.0',
+              lastModified: Date.now()
+          };
+          if (scriptFileHandle) {
+              const w = await scriptFileHandle.createWritable();
+              await w.write(JSON.stringify(data, null, 2));
+              await w.close();
+              alert("Script saved!");
+          } else {
+              handleSaveAs();
+          }
+      } else {
+          const data: OutlineFile = {
+              fileType: 'OUTLINE',
+              title: outlineTitle,
+              nodes: outlineNodes,
+              edges: outlineEdges,
+              zoom: outlineZoom,
+              pan: {x:0, y:0},
+              version: '1.0.0',
+              lastModified: Date.now()
+          };
+          if (outlineFileHandle) {
+              const w = await outlineFileHandle.createWritable();
+              await w.write(JSON.stringify(data, null, 2));
+              await w.close();
+              alert("Outline saved!");
+          } else {
+              handleSaveAs();
           }
       }
-      
-      // 2. If no handle, treat as Save As
-      handleSaveAs();
   };
 
   const handleSaveAs = async () => {
-      // Check for native API support
+      const isScript = appMode === 'SCRIPT';
+      const title = isScript ? scriptTitle : outlineTitle;
+      const suggestedName = `${title.replace(/\s+/g, '_')}_${isScript ? 'script' : 'outline'}.json`;
+
+      const data = isScript ? {
+          fileType: 'SCRIPT',
+          title: scriptTitle,
+          nodes,
+          zoom: scriptZoom,
+          pan: {x:0, y:0},
+          viewOptions,
+          version: '1.0.0',
+          lastModified: Date.now()
+      } : {
+          fileType: 'OUTLINE',
+          title: outlineTitle,
+          nodes: outlineNodes,
+          edges: outlineEdges,
+          zoom: outlineZoom,
+          pan: {x:0, y:0},
+          version: '1.0.0',
+          lastModified: Date.now()
+      };
+
       if ('showSaveFilePicker' in window) {
           try {
               const handle = await (window as any).showSaveFilePicker({
-                  suggestedName: `${projectTitle.replace(/\s+/g, '_')}.json`,
-                  types: [{
-                      description: 'JSON Project File',
-                      accept: { 'application/json': ['.json'] },
-                  }],
+                  suggestedName,
+                  types: [{ description: 'JSON Project File', accept: { 'application/json': ['.json'] } }],
               });
               
-              setFileHandle(handle);
+              if (isScript) setScriptFileHandle(handle);
+              else setOutlineFileHandle(handle);
+
+              const w = await handle.createWritable();
+              await w.write(JSON.stringify(data, null, 2));
+              await w.close();
               
-              // Now write
-              const writable = await handle.createWritable();
-              const projectData: ProjectFile = {
-                  title: projectTitle,
-                  nodes,
-                  zoom,
-                  pan: {x: 0, y: 0},
-                  version: '1.0.0',
-                  lastModified: Date.now(),
-                  viewOptions
-              };
-              await writable.write(JSON.stringify(projectData, null, 2));
-              await writable.close();
-              
-              // Update title from file name if possible
               if (handle.name) {
-                  const name = handle.name.replace('.json', '');
-                  setProjectTitle(name);
+                  const newName = handle.name.replace('.json', '').replace(/_(script|outline)$/, '');
+                  if (isScript) setScriptTitle(newName);
+                  else setOutlineTitle(newName);
               }
-          } catch (err: any) {
-              if (err.name !== 'AbortError') {
-                  console.error("Save As failed", err);
-                  alert("Failed to save file.");
-              }
-          }
+          } catch (e: any) { if(e.name !== 'AbortError') alert("Save failed"); }
       } else {
-          // Fallback to legacy download
-          const projectData: ProjectFile = {
-            title: projectTitle,
-            nodes,
-            zoom,
-            pan: { x: 0, y: 0 },
-            version: '1.0.0',
-            lastModified: Date.now(),
-            viewOptions
-          };
-          saveProjectFile(projectData);
+          saveProjectFile(data as any); // Fallback download
       }
   };
 
   const handleOpenProjectClick = async () => {
-       // Check for native API support
-       if ('showOpenFilePicker' in window) {
-           try {
-               const [handle] = await (window as any).showOpenFilePicker({
-                   types: [{
-                       description: 'JSON Project File',
-                       accept: { 'application/json': ['.json'] },
-                   }],
-                   multiple: false
-               });
-               
-               const file = await handle.getFile();
-               const text = await file.text();
-               const parsed = JSON.parse(text);
-               
-               if (parsed && Array.isArray(parsed.nodes)) {
-                   setNodes(parsed.nodes);
-                   if (parsed.title) setProjectTitle(parsed.title);
-                   else setProjectTitle(file.name.replace('.json', ''));
-                   
-                   if (parsed.viewOptions) setViewOptions(parsed.viewOptions);
-                   if (parsed.zoom) setZoom(parsed.zoom);
-                   
-                   setFileHandle(handle);
-                   setHistory([{ nodes: parsed.nodes }]);
-                   setHistoryIndex(0);
-                   setSelectedNodeId(null);
-               } else {
-                   alert("Invalid file format.");
-               }
-           } catch (err: any) {
-               if (err.name !== 'AbortError') {
-                   console.error("Open failed", err);
-                   alert("Failed to open file.");
-               }
-           }
-       } else {
-          // Fallback to legacy input click
-          if (fileInputRef.current) fileInputRef.current.click();
-       }
-  };
-
-  const handleLegacyFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-      const file = e.target.files?.[0];
-      if (!file) return;
-      const reader = new FileReader();
-      reader.onload = (event) => {
+      if ('showOpenFilePicker' in window) {
           try {
-              const result = event.target?.result as string;
-              const parsed = JSON.parse(result);
-              if (parsed && Array.isArray(parsed.nodes)) {
+              const [handle] = await (window as any).showOpenFilePicker({
+                  types: [{ description: 'JSON Project File', accept: { 'application/json': ['.json'] } }],
+                  multiple: false
+              });
+              const file = await handle.getFile();
+              const text = await file.text();
+              const parsed = JSON.parse(text);
+
+              if (parsed.fileType === 'SCRIPT' || (Array.isArray(parsed.nodes) && !parsed.edges)) {
+                  // Load Script
+                  setAppMode('SCRIPT');
                   setNodes(parsed.nodes);
-                  if (parsed.title) setProjectTitle(parsed.title);
+                  setScriptTitle(parsed.title || file.name.replace('.json', ''));
                   if (parsed.viewOptions) setViewOptions(parsed.viewOptions);
-                  if (parsed.zoom) setZoom(parsed.zoom);
-                  
+                  setScriptZoom(parsed.zoom || 1.0);
+                  setScriptFileHandle(handle);
+                  setScriptHistory([parsed.nodes]);
+                  setScriptHistoryIndex(0);
                   setSelectedNodeId(null);
-                  setFileHandle(null); // No handle for legacy upload
-                  setHistory([{ nodes: parsed.nodes }]);
-                  setHistoryIndex(0);
+              } else if (parsed.fileType === 'OUTLINE' || (Array.isArray(parsed.nodes) && parsed.edges)) {
+                  // Load Outline
+                  setAppMode('OUTLINE');
+                  setOutlineNodes(parsed.nodes);
+                  setOutlineEdges(parsed.edges || []);
+                  setOutlineTitle(parsed.title || file.name.replace('.json', ''));
+                  setOutlineZoom(parsed.zoom || 1.0);
+                  setOutlineFileHandle(handle);
+                  setOutlineHistory([{ nodes: parsed.nodes, edges: parsed.edges || [] }]);
+                  setOutlineHistoryIndex(0);
+                  setSelectedOutlineNodeId(null);
               } else {
-                  alert("Invalid project file format.");
+                  alert("Unknown file format.");
               }
-          } catch (err) {
-              console.error(err);
-              alert("Failed to parse project file.");
-          }
-      };
-      reader.readAsText(file);
-      e.target.value = '';
+          } catch (e: any) { if (e.name !== 'AbortError') console.error(e); }
+      } else {
+          if (fileInputRef.current) fileInputRef.current.click();
+      }
   };
 
+  // Export Logic Wrapper
   const handleExport = (format: 'json' | 'excel' | 'png') => {
-    switch (format) {
-      case 'json':
-        exportToJson(nodes, projectTitle);
-        break;
-      case 'excel':
-        exportToExcel(nodes, projectTitle);
-        break;
-      case 'png':
-        exportToPng('graph-canvas-container', projectTitle);
-        break;
-    }
+      if (appMode === 'SCRIPT') {
+          if (format === 'json') exportToJson(nodes, scriptTitle);
+          if (format === 'excel') exportToExcel(nodes, scriptTitle);
+          if (format === 'png') exportToPng(scriptViewMode === 'GRAPH' ? 'graph-canvas-container' : 'table-container', scriptTitle);
+      } else {
+           // Outline export logic
+           if (format === 'json') exportToJson(outlineNodes as any, outlineTitle); // Raw dump
+           if (format === 'png') exportToPng('outline-canvas-container', outlineTitle);
+           if (format === 'excel') alert("Excel export not available for Outline mode yet.");
+      }
   };
 
-  const selectedNode = nodes.find(n => n.id === selectedNodeId) || null;
 
   return (
     <div className="flex flex-col h-screen w-full bg-slate-50 text-slate-900 font-sans">
-      {/* Hidden File Input for Legacy Open Project */}
-      <input 
-        type="file" 
-        ref={fileInputRef} 
-        onChange={handleLegacyFileChange} 
-        accept=".json" 
-        className="hidden" 
-      />
+      <input type="file" ref={fileInputRef} className="hidden" />
 
       <Toolbar 
-        viewMode={viewMode}
-        setViewMode={setViewMode}
-        onAddNode={handleAddNode}
-        onExport={handleExport}
-        viewOptions={viewOptions}
-        onToggleViewOption={handleToggleViewOption}
-        filterOptions={filterOptions}
-        onFilterChange={handleFilterChange}
-        zoom={zoom}
-        onZoomChange={setZoom}
+        appMode={appMode}
+        setAppMode={setAppMode}
+        viewMode={scriptViewMode}
+        setViewMode={setScriptViewMode}
         
-        // File Props
-        projectTitle={projectTitle}
-        setProjectTitle={setProjectTitle}
+        // Common
+        onAddNode={appMode === 'SCRIPT' ? handleAddNode : handleAddOutlineNode}
+        onExport={handleExport}
+        isAutoSaved={isAutoSaved}
+        
+        // Settings
+        viewOptions={viewOptions}
+        onToggleViewOption={(k) => setViewOptions(p => ({...p, [k]: !p[k]}))}
+        filterOptions={filterOptions}
+        onFilterChange={(k, v) => setFilterOptions(p => ({...p, [k]: v}))}
+        
+        // Zoom
+        zoom={appMode === 'SCRIPT' ? scriptZoom : outlineZoom}
+        onZoomChange={appMode === 'SCRIPT' ? setScriptZoom : setOutlineZoom}
+        
+        // Project
+        projectTitle={appMode === 'SCRIPT' ? scriptTitle : outlineTitle}
+        setProjectTitle={appMode === 'SCRIPT' ? setScriptTitle : setOutlineTitle}
         onNewProject={handleNewProject}
         onSaveProject={handleSaveProject}
         onSaveAs={handleSaveAs}
         onOpenProject={handleOpenProjectClick}
-        isAutoSaved={isAutoSaved}
-
-        // History Props
-        canUndo={historyIndex > 0}
-        canRedo={historyIndex < history.length - 1}
+        
+        // History
+        canUndo={appMode === 'SCRIPT' ? scriptHistoryIndex > 0 : outlineHistoryIndex > 0}
+        canRedo={appMode === 'SCRIPT' ? scriptHistoryIndex < scriptHistory.length - 1 : outlineHistoryIndex < outlineHistory.length - 1}
         onUndo={handleUndo}
         onRedo={handleRedo}
       />
       
       <div className="flex-1 flex overflow-hidden relative">
         <div className="flex-1 flex flex-col min-w-0">
-            {viewMode === 'TABLE' ? (
-              <TableView 
-                nodes={nodes} 
-                onUpdateNode={handleUpdateNode}
-                onDeleteNode={handleDeleteNode}
-                onSelectNode={setSelectedNodeId}
-                onReorderNodes={handleReorderNodes}
-                selectedNodeId={selectedNodeId}
-                viewOptions={viewOptions}
-                filterOptions={filterOptions}
-                lists={globalLists}
-                zoom={zoom}
-              />
+            {appMode === 'SCRIPT' ? (
+                scriptViewMode === 'TABLE' ? (
+                    <div id="table-container" className="flex-1 overflow-auto">
+                        <TableView 
+                            nodes={nodes} 
+                            onUpdateNode={handleUpdateNode}
+                            onDeleteNode={handleDeleteNode}
+                            onSelectNode={setSelectedNodeId}
+                            onReorderNodes={handleReorderNodes}
+                            selectedNodeId={selectedNodeId}
+                            viewOptions={viewOptions}
+                            filterOptions={filterOptions}
+                            lists={globalLists}
+                            zoom={scriptZoom}
+                        />
+                    </div>
+                ) : (
+                    <GraphView 
+                        nodes={nodes}
+                        onUpdateNode={handleUpdateNode}
+                        onUpdateNodes={handleUpdateNodes}
+                        onSelectNode={setSelectedNodeId}
+                        selectedNodeId={selectedNodeId}
+                        viewOptions={viewOptions}
+                        filterOptions={filterOptions}
+                        lists={globalLists}
+                        zoom={scriptZoom}
+                    />
+                )
             ) : (
-              <GraphView 
-                nodes={nodes}
-                onUpdateNode={handleUpdateNode}
-                onUpdateNodes={handleUpdateNodes}
-                onSelectNode={setSelectedNodeId}
-                selectedNodeId={selectedNodeId}
-                viewOptions={viewOptions}
-                filterOptions={filterOptions}
-                lists={globalLists}
-                zoom={zoom}
-              />
+                <OutlineView 
+                    nodes={outlineNodes}
+                    edges={outlineEdges}
+                    onUpdate={handleUpdateOutline}
+                    zoom={outlineZoom}
+                    selectedNodeId={selectedOutlineNodeId}
+                    onSelectNode={setSelectedOutlineNodeId}
+                    onDeleteNode={handleDeleteOutlineNode}
+                />
             )}
         </div>
 
-        <Inspector 
-          node={selectedNode}
-          allNodes={nodes}
-          onUpdate={handleUpdateNode}
-          onClose={() => setSelectedNodeId(null)}
-          lists={globalLists}
-        />
+        {appMode === 'SCRIPT' && (
+            <Inspector 
+                node={nodes.find(n => n.id === selectedNodeId) || null}
+                allNodes={nodes}
+                onUpdate={handleUpdateNode}
+                onClose={() => setSelectedNodeId(null)}
+                lists={globalLists}
+            />
+        )}
+        
+        {appMode === 'OUTLINE' && (
+            <OutlineInspector 
+                node={outlineNodes.find(n => n.id === selectedOutlineNodeId) || null}
+                onUpdate={handleUpdateOutlineNode}
+                onDelete={handleDeleteOutlineNode}
+                onClose={() => setSelectedOutlineNodeId(null)}
+            />
+        )}
       </div>
     </div>
   );
