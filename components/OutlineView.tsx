@@ -1,3 +1,4 @@
+
 import React, { useRef, useState } from 'react';
 import { OutlineNode, OutlineEdge, AnchorSide, OutlineColor, OutlineNodeType } from '../types';
 import { Palette, Trash2, Diamond, Flag, Square, Sparkles, X } from 'lucide-react';
@@ -610,11 +611,22 @@ export const OutlineView: React.FC<OutlineViewProps> = ({
                             transform: 'translate(-50%, -50%)'
                         }}
                       >
-                          <input 
+                          <textarea 
                              value={edge.label || ''}
-                             onChange={(e) => updateEdgeLabel(edge.id, e.target.value)}
+                             onChange={(e) => {
+                                updateEdgeLabel(edge.id, e.target.value);
+                                e.target.style.height = 'auto';
+                                e.target.style.height = e.target.scrollHeight + 'px';
+                             }}
+                             ref={(el) => {
+                                if (el) {
+                                    el.style.height = 'auto';
+                                    el.style.height = el.scrollHeight + 'px';
+                                }
+                             }}
                              placeholder="Choice..."
-                             className="bg-white border border-indigo-200 text-indigo-700 text-xs px-2 py-1 rounded shadow-sm focus:outline-none focus:ring-1 focus:ring-indigo-500 w-24 text-center"
+                             rows={1}
+                             className="bg-white border border-indigo-200 text-indigo-700 text-xs px-2 py-1.5 rounded shadow-sm focus:outline-none focus:ring-1 focus:ring-indigo-500 text-center resize-none overflow-hidden min-w-[6rem] w-32 max-w-[12rem]"
                              onMouseDown={(e) => e.stopPropagation()}
                           />
                       </div>

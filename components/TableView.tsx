@@ -1,5 +1,5 @@
 
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { ScriptNode, NodeType, ViewOptions, FilterOptions, GlobalLists, getNodeLabel } from '../types';
 import { MessageSquare, GitFork, Flag, PlayCircle, Trash2, Brain, GripVertical } from 'lucide-react';
 import { EditableSelect } from './EditableSelect';
@@ -31,6 +31,52 @@ export const TableView: React.FC<TableViewProps> = ({
 }) => {
   
   const [draggedNodeIndex, setDraggedNodeIndex] = useState<number | null>(null);
+
+  // --- Column Resizing State ---
+  const [colWidths, setColWidths] = useState<Record<string, number>>({
+      drag: 40,
+      type: 110,
+      scene: 150,
+      character: 140,
+      art: 140,
+      expression: 140,
+      text: 400,
+      logic: 200,
+      actions: 80
+  });
+
+  const handleResizeStart = (e: React.MouseEvent, key: string) => {
+      e.preventDefault();
+      e.stopPropagation();
+      
+      const startX = e.clientX;
+      const startWidth = colWidths[key];
+
+      const onMouseMove = (moveEvent: MouseEvent) => {
+          const diff = moveEvent.clientX - startX;
+          // Minimum width of 50px to prevent disappearing columns
+          setColWidths(prev => ({ ...prev, [key]: Math.max(50, startWidth + diff) }));
+      };
+
+      const onMouseUp = () => {
+          document.removeEventListener('mousemove', onMouseMove);
+          document.removeEventListener('mouseup', onMouseUp);
+          document.body.style.cursor = 'default';
+      };
+
+      document.addEventListener('mousemove', onMouseMove);
+      document.addEventListener('mouseup', onMouseUp);
+      document.body.style.cursor = 'col-resize';
+  };
+
+  const Resizer = ({ columnKey }: { columnKey: string }) => (
+      <div 
+        className="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-indigo-400 active:bg-indigo-600 z-10 transition-colors group-hover:bg-slate-300/50"
+        onMouseDown={(e) => handleResizeStart(e, columnKey)}
+      />
+  );
+
+  // --- Type Icons & Colors ---
 
   const getTypeIcon = (type: NodeType) => {
     switch (type) {
@@ -69,12 +115,11 @@ export const TableView: React.FC<TableViewProps> = ({
       if (!isReorderEnabled) return;
       setDraggedNodeIndex(index);
       e.dataTransfer.effectAllowed = "move";
-      // Optional: set custom drag image
   };
 
   const handleDragOver = (e: React.DragEvent) => {
       if (!isReorderEnabled) return;
-      e.preventDefault(); // Necessary to allow dropping
+      e.preventDefault(); 
   };
 
   const handleDrop = (e: React.DragEvent, dropIndex: number) => {
@@ -93,19 +138,61 @@ export const TableView: React.FC<TableViewProps> = ({
             width: `${100 / zoom}%`
         }}
       >
-        <div className="border border-slate-200 rounded-lg shadow-sm bg-white">
-          <table className="min-w-full divide-y divide-slate-200">
+        <div className="border border-slate-200 rounded-lg shadow-sm bg-white overflow-hidden">
+          {/* Important: table-fixed allows us to strictly control column widths */}
+          <table className="min-w-full divide-y divide-slate-200 table-fixed">
             <thead className="bg-slate-50">
               <tr>
-                <th scope="col" className="w-10 px-0 py-4"></th>
-                <th scope="col" className="px-6 py-4 text-left text-sm font-semibold text-slate-500 uppercase tracking-wider w-28">Type</th>
-                {viewOptions.showScene && <th scope="col" className="px-6 py-4 text-left text-sm font-semibold text-slate-500 uppercase tracking-wider w-40">Scene</th>}
-                <th scope="col" className="px-6 py-4 text-left text-sm font-semibold text-slate-500 uppercase tracking-wider w-40">Character</th>
-                {viewOptions.showArt && <th scope="col" className="px-6 py-4 text-left text-sm font-semibold text-slate-500 uppercase tracking-wider w-40">Art/Sprite</th>}
-                {viewOptions.showExpression && <th scope="col" className="px-6 py-4 text-left text-sm font-semibold text-slate-500 uppercase tracking-wider w-40">Expression</th>}
-                <th scope="col" className="px-6 py-4 text-left text-sm font-semibold text-slate-500 uppercase tracking-wider">Content / Text</th>
-                {viewOptions.showLogic && <th scope="col" className="px-6 py-4 text-left text-sm font-semibold text-slate-500 uppercase tracking-wider w-56">Next Logic</th>}
-                <th scope="col" className="px-6 py-4 text-right text-sm font-semibold text-slate-500 uppercase tracking-wider w-24">Actions</th>
+                <th scope="col" style={{ width: colWidths.drag }} className="px-0 py-4 relative group">
+                </th>
+                
+                <th scope="col" style={{ width: colWidths.type }} className="px-6 py-4 text-left text-sm font-semibold text-slate-500 uppercase tracking-wider relative group select-none">
+                    Type
+                    <Resizer columnKey="type" />
+                </th>
+
+                {viewOptions.showScene && (
+                    <th scope="col" style={{ width: colWidths.scene }} className="px-6 py-4 text-left text-sm font-semibold text-slate-500 uppercase tracking-wider relative group select-none">
+                        Scene
+                        <Resizer columnKey="scene" />
+                    </th>
+                )}
+                
+                <th scope="col" style={{ width: colWidths.character }} className="px-6 py-4 text-left text-sm font-semibold text-slate-500 uppercase tracking-wider relative group select-none">
+                    Character
+                    <Resizer columnKey="character" />
+                </th>
+                
+                {viewOptions.showArt && (
+                    <th scope="col" style={{ width: colWidths.art }} className="px-6 py-4 text-left text-sm font-semibold text-slate-500 uppercase tracking-wider relative group select-none">
+                        Art/Sprite
+                        <Resizer columnKey="art" />
+                    </th>
+                )}
+                
+                {viewOptions.showExpression && (
+                    <th scope="col" style={{ width: colWidths.expression }} className="px-6 py-4 text-left text-sm font-semibold text-slate-500 uppercase tracking-wider relative group select-none">
+                        Expression
+                        <Resizer columnKey="expression" />
+                    </th>
+                )}
+                
+                <th scope="col" style={{ width: colWidths.text }} className="px-6 py-4 text-left text-sm font-semibold text-slate-500 uppercase tracking-wider relative group select-none">
+                    Content / Text
+                    <Resizer columnKey="text" />
+                </th>
+                
+                {viewOptions.showLogic && (
+                    <th scope="col" style={{ width: colWidths.logic }} className="px-6 py-4 text-left text-sm font-semibold text-slate-500 uppercase tracking-wider relative group select-none">
+                        Next Logic
+                        <Resizer columnKey="logic" />
+                    </th>
+                )}
+                
+                <th scope="col" style={{ width: colWidths.actions }} className="px-6 py-4 text-right text-sm font-semibold text-slate-500 uppercase tracking-wider relative group select-none">
+                    Actions
+                    <Resizer columnKey="actions" />
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200 bg-white">
@@ -127,13 +214,13 @@ export const TableView: React.FC<TableViewProps> = ({
                       <GripVertical size={16} className="inline-block mt-2" />
                   </td>
 
-                  <td className="px-6 py-5 whitespace-nowrap align-top">
-                    <div className="flex items-center gap-2 mt-1.5">
-                      {getTypeIcon(node.type)}
+                  <td className="px-6 py-5 align-top">
+                    <div className="flex items-center gap-2 mt-1.5 overflow-hidden">
+                      <div className="shrink-0">{getTypeIcon(node.type)}</div>
                       <select
                         value={node.type}
                         onChange={(e) => onUpdateNode({ ...node, type: e.target.value as NodeType })}
-                        className="bg-transparent text-base text-slate-700 focus:outline-none focus:text-slate-900 cursor-pointer font-medium"
+                        className="bg-transparent text-base text-slate-700 focus:outline-none focus:text-slate-900 cursor-pointer font-medium w-full truncate"
                       >
                         {Object.values(NodeType).map(t => (
                           <option key={t} value={t}>{t}</option>
@@ -143,7 +230,7 @@ export const TableView: React.FC<TableViewProps> = ({
                   </td>
                   
                   {viewOptions.showScene && (
-                      <td className="px-6 py-5 whitespace-nowrap align-top">
+                      <td className="px-6 py-5 align-top">
                         <EditableSelect
                           value={node.scene || ''}
                           onChange={(val) => onUpdateNode({ ...node, scene: val })}
@@ -153,7 +240,7 @@ export const TableView: React.FC<TableViewProps> = ({
                       </td>
                   )}
 
-                  <td className="px-6 py-5 whitespace-nowrap align-top">
+                  <td className="px-6 py-5 align-top">
                     <EditableSelect
                       value={node.character}
                       onChange={(val) => onUpdateNode({ ...node, character: val })}
@@ -164,7 +251,7 @@ export const TableView: React.FC<TableViewProps> = ({
                   </td>
 
                   {viewOptions.showArt && (
-                      <td className="px-6 py-5 whitespace-nowrap align-top">
+                      <td className="px-6 py-5 align-top">
                          <EditableSelect
                           value={node.characterArt || ''}
                           onChange={(val) => onUpdateNode({ ...node, characterArt: val })}
@@ -175,7 +262,7 @@ export const TableView: React.FC<TableViewProps> = ({
                   )}
 
                   {viewOptions.showExpression && (
-                      <td className="px-6 py-5 whitespace-nowrap align-top">
+                      <td className="px-6 py-5 align-top">
                         <EditableSelect
                           value={node.expression || ''}
                           onChange={(val) => onUpdateNode({ ...node, expression: val })}
@@ -201,18 +288,18 @@ export const TableView: React.FC<TableViewProps> = ({
                   </td>
 
                   {viewOptions.showLogic && (
-                    <td className="px-6 py-5 whitespace-nowrap text-base text-slate-500 align-top pt-6">
+                    <td className="px-6 py-5 text-base text-slate-500 align-top pt-6">
                         {node.type === NodeType.CHOICE ? (
-                        <span className="text-purple-600 font-medium">{node.choices.length} branches</span>
+                        <span className="text-purple-600 font-medium whitespace-nowrap">{node.choices.length} branches</span>
                         ) : node.type === NodeType.END ? (
-                        <span className="text-red-500 font-medium">End of Line</span>
+                        <span className="text-red-500 font-medium whitespace-nowrap">End of Line</span>
                         ) : (
-                        <div className="flex items-center gap-2">
-                            <span>Go to:</span>
+                        <div className="flex items-center gap-2 overflow-hidden">
+                            <span className="shrink-0">Go to:</span>
                             <select
                             value={node.nextId || ''}
                             onChange={(e) => onUpdateNode({ ...node, nextId: e.target.value || null })}
-                            className="bg-white/50 border border-slate-300 rounded px-2 py-1 text-sm text-slate-700 focus:border-indigo-500 focus:outline-none max-w-[150px] truncate"
+                            className="bg-white/50 border border-slate-300 rounded px-2 py-1 text-sm text-slate-700 focus:border-indigo-500 focus:outline-none w-full truncate"
                             >
                             <option value="">None</option>
                             {nodes.filter(n => n.id !== node.id).map(n => (
@@ -226,7 +313,7 @@ export const TableView: React.FC<TableViewProps> = ({
                     </td>
                   )}
 
-                  <td className="px-6 py-5 whitespace-nowrap text-right text-sm font-medium align-top pt-6">
+                  <td className="px-6 py-5 text-right text-sm font-medium align-top pt-6">
                     <button 
                       onClick={(e) => {
                         e.stopPropagation();
